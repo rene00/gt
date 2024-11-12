@@ -47,7 +47,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = gnucash.Accounts(qm.Where("guid=?", flags.SourceAccount)).One(cmd.Context(), db)
+				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -55,7 +55,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = gnucash.Accounts(qm.Where("guid=?", flags.DestinationAccount)).One(cmd.Context(), db)
+				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
@@ -106,8 +106,8 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID")
-	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID")
+	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
 	cmd.Flags().StringVar(&flags.DescriptionLike, "description-like", "", "Description like")
 	return cmd
 }
@@ -139,7 +139,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = gnucash.Accounts(qm.Where("guid=?", flags.SourceAccount)).One(cmd.Context(), db)
+				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -147,7 +147,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = gnucash.Accounts(qm.Where("guid=?", flags.DestinationAccount)).One(cmd.Context(), db)
+				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
@@ -190,8 +190,8 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID")
-	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID")
+	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
 	return cmd
 }
 
@@ -200,6 +200,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 		Account         string
 		Limit           int
 		StartPostDate   string
+		EndPostDate     string
 		DescriptionLike string
 	}
 	var cmd = &cobra.Command{
@@ -216,7 +217,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 
 			gAccount := &gnucash.Account{}
 			if flags.Account != "" {
-				gAccount, err = gnucash.Accounts(qm.Where("guid=?", flags.Account)).One(cmd.Context(), db)
+				gAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.Account)
 				if err != nil {
 					return err
 				}
@@ -237,6 +238,14 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 					return err
 				}
 				q = append(q, qm.Where("transactions.post_date>=?", startPostDate.Format("2006-01-02")))
+			}
+
+			if flags.EndPostDate != "" {
+				endPostDate, err := time.Parse("2006-01-02", flags.EndPostDate)
+				if err != nil {
+					return err
+				}
+				q = append(q, qm.Where("transactions.post_date<=?", endPostDate.Format("2006-01-02")))
 			}
 
 			if flags.DescriptionLike != "" {

@@ -49,6 +49,11 @@ Get an account by `guid`:
 $ gt account get 9b1d2bc513da4076b236aee6114b21a7
 ```
 
+Get an account by account tree:
+```shell
+$ gt account get expenses:groceries
+```
+
 List transactions:
 ```shell
 $ gt transaction list
@@ -57,6 +62,11 @@ $ gt transaction list
 List transactions for account `guid`:
 ```shell
 $ gt transaction list --account 9b1d2bc513da4076b236aee6114b21a7
+```
+
+List transactions for account tree:
+```shell
+$ gt transaction list --account expenses:groceries
 ```
 
 List transactions starting from a date with a description that contains
@@ -69,21 +79,14 @@ $ gt transaction list --start-post-date 2024-01-01 \
 Update a transaction account:
 ```shell
 $ gt transaction update 0000000000000000fa1ce5381fec0d51 \
-    --source-account 0000000000000000aa5c507b81da0642 \
-    --destination-account 00000000000000009a8aca32c024a72c
-```
-
-Update a transaction account:
-```shell
-$ gt transaction update 0000000000000000fa1ce5381fec0d51 \
-    --source-account 0000000000000000aa5c507b81da0642 \
-    --destination-account 00000000000000009a8aca32c024a72c
+    --source-account expenses:pizza
+    --destination-account expenses:dining
 ```
 
 Update many transactions account based on their description:
 ```shell
 $ gt transaction bulk-update \
     --description-like "%Pizza" \
-    --source-account 0000000000000000aa5c507b81da0642 \
-    --destination-account 00000000000000009a8aca32c024a72c
+    --source-account expenses:pizza \
+    --destination-account expenses:dining
 ```
