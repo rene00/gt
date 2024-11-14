@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"gt/internal/types"
@@ -33,13 +32,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 	var cmd = &cobra.Command{
 		Use: "bulk-update",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			db, err := sql.Open("sqlite3", cli.config.GnucashDBFile)
-			if err != nil {
-				return err
-			}
-			boil.SetDB(db)
-
-			tx, err := db.BeginTx(cmd.Context(), nil)
+			tx, err := cli.db.BeginTx(cmd.Context(), nil)
 			if err != nil {
 				return err
 			}
@@ -47,7 +40,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.SourceAccount)
+				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -55,7 +48,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.DestinationAccount)
+				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
@@ -67,14 +60,14 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 				q = append(q, qm.Where("transactions.description LIKE ?", flags.DescriptionLike))
 			}
 
-			gTransactions, err := gnucash.Transactions(q...).All(cmd.Context(), db)
+			gTransactions, err := gnucash.Transactions(q...).All(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}
 
 			transactions := []types.Transaction{}
 			for _, gTransaction := range gTransactions {
-				splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), db)
+				splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), cli.db)
 				if err != nil {
 					return err
 				}
@@ -85,7 +78,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 						if err != nil {
 							return err
 						}
-						transaction, err := types.NewTransaction(cmd.Context(), db, *gTransaction)
+						transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
 						if err != nil {
 							return err
 						}
@@ -125,13 +118,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 			}
 			guid := args[0]
 
-			db, err := sql.Open("sqlite3", cli.config.GnucashDBFile)
-			if err != nil {
-				return err
-			}
-			boil.SetDB(db)
-
-			tx, err := db.BeginTx(cmd.Context(), nil)
+			tx, err := cli.db.BeginTx(cmd.Context(), nil)
 			if err != nil {
 				return err
 			}
@@ -139,7 +126,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.SourceAccount)
+				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -147,18 +134,18 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.DestinationAccount)
+				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
 			}
 
-			gTransaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), db)
+			gTransaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}
 
-			splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), db)
+			splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}
@@ -177,7 +164,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			transaction, err := types.NewTransaction(cmd.Context(), db, *gTransaction)
+			transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
 			if err != nil {
 				return err
 			}
@@ -206,18 +193,13 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 	var cmd = &cobra.Command{
 		Use: "list",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			db, err := sql.Open("sqlite3", cli.config.GnucashDBFile)
-			if err != nil {
-				return err
-			}
-			boil.SetDB(db)
-
+			var err error
 			unbounded := false
 			q := []qm.QueryMod{}
 
 			gAccount := &gnucash.Account{}
 			if flags.Account != "" {
-				gAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), db, flags.Account)
+				gAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.Account)
 				if err != nil {
 					return err
 				}
@@ -259,12 +241,12 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 					qm.InnerJoin("transactions ON splits.tx_guid = transactions.guid"),
 					qm.OrderBy("transactions.post_date"),
 				}...)
-				splits, err := gnucash.Splits(q...).All(cmd.Context(), db)
+				splits, err := gnucash.Splits(q...).All(cmd.Context(), cli.db)
 				if err != nil {
 					return err
 				}
 				for _, split := range splits {
-					gTransaction, err := gnucash.Transactions(qm.Where("guid=?", split.TXGUID)).One(cmd.Context(), db)
+					gTransaction, err := gnucash.Transactions(qm.Where("guid=?", split.TXGUID)).One(cmd.Context(), cli.db)
 					if err != nil {
 						return err
 					}
@@ -273,7 +255,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 					}
 				}
 			} else {
-				gTransactions, err = gnucash.Transactions(q...).All(cmd.Context(), db)
+				gTransactions, err = gnucash.Transactions(q...).All(cmd.Context(), cli.db)
 				if err != nil {
 					return err
 				}
@@ -281,7 +263,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 
 			transactions := []types.Transaction{}
 			for _, gTransaction := range gTransactions {
-				transaction, err := types.NewTransaction(cmd.Context(), db, *gTransaction)
+				transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
 				if err != nil {
 					return err
 				}
@@ -312,14 +294,8 @@ func getTransactionCmd(cli *cli) *cobra.Command {
 				return fmt.Errorf("missing transaction guid")
 			}
 
-			db, err := sql.Open("sqlite3", GnuCashSqliteURI)
-			if err != nil {
-				return err
-			}
-			boil.SetDB(db)
-
 			guid := args[0]
-			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), db)
+			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}

@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/volatiletech/sqlboiler/v4/boil"
 )
 
 type cli struct {
@@ -15,6 +17,7 @@ type cli struct {
 	initOnce   sync.Once
 	errOnce    error
 	config     config
+	db         *sql.DB
 }
 
 type config struct {
@@ -54,5 +57,12 @@ func (c *cli) initContext() error {
 			return err
 		}
 	}
+
+	c.db, err = sql.Open("sqlite3", c.config.GnucashDBFile)
+	if err != nil {
+		return err
+	}
+	boil.SetDB(c.db)
+
 	return nil
 }
