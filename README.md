@@ -90,3 +90,11 @@ $ gt transaction bulk-update \
     --source-account expenses:pizza \
     --destination-account expenses:dining
 ```
+
+Update an account:
+```shell
+$ gt account update "expenses:automotive registration" \
+    --name "registration" \
+    --description "auto registration" \
+    --parent-account "expenses:automotive"
+```
