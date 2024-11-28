@@ -19,6 +19,7 @@ import (
 )
 
 var (
+	ErrTransactionMissing   = errors.New("transaction guid missing")
 	ErrAccountDoesNotExist  = errors.New("account does not exist")
 	ErrAccountMissingParent = errors.New("account missing parent")
 	ErrAccountMissing       = errors.New("account name or guid missing")
