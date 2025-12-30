@@ -70,48 +70,6 @@ func TestGetAccountCmd(t *testing.T) {
 	}
 }
 
-func TestGetAccountTree(t *testing.T) {
-	var err error
-	ctx := context.Background()
-
-	c := &cli{}
-	c.db, err = sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	boil.SetDB(c.db)
-
-	if err = createTestingTables(ctx, c.db, t); err != nil {
-		t.Fatal(err)
-	}
-
-	account := gnucash.Account{
-		Name: "test1", GUID: "2", ParentGUID: null.StringFrom("EXPENSESGUID"),
-	}
-	if err := account.Insert(ctx, c.db, boil.Infer()); err != nil {
-		t.Fatal(err)
-	}
-
-	accountTree, err := c.getAccountTree(ctx, &account)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(accountTree) != 3 {
-		t.Fatalf("expect length of 3 but got %d", len(accountTree))
-	}
-
-	rootAccount := accountTree[0]
-	if rootAccount.Name != "Root Account" {
-		t.Fatal()
-	}
-
-	lastAccount := accountTree[len(accountTree)-1]
-	if lastAccount.Name != "test1" {
-		t.Fatalf("expected name of test1 but got %s", lastAccount.Name)
-	}
-}
-
 func TestListAccountCmd(t *testing.T) {
 	var err error
 	ctx := context.Background()

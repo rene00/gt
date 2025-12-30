@@ -5,12 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"gt/models/gnucash"
 	"os"
 	"path"
-	"slices"
-	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -107,31 +104,4 @@ func (c *cli) getAccountFromGUIDOrAccountTree(ctx context.Context, s string) (*g
 		}
 	}
 	return account, nil
-}
-
-func (c *cli) getAccountTreeString(ctx context.Context, accountTree []*gnucash.Account) (s string, err error) {
-	var b strings.Builder
-	for _, account := range accountTree {
-		b.WriteString(fmt.Sprintf("%s:", account.Name))
-	}
-	return b.String(), nil
-}
-
-// getAccountTree returns a slice containing account tree for a gnucash.Account.
-// Slice is ordered with child from Root account being the first item.
-func (c *cli) getAccountTree(ctx context.Context, account *gnucash.Account) ([]*gnucash.Account, error) {
-	accountTree := []*gnucash.Account{account}
-	for {
-		parentAccount, err := gnucash.Accounts(qm.Where("guid=?", account.ParentGUID.String)).One(ctx, c.db)
-		if err != nil {
-			return accountTree, err
-		}
-		accountTree = append(accountTree, parentAccount)
-		account = parentAccount
-		if parentAccount.ParentGUID.String == "" {
-			break
-		}
-	}
-	slices.Reverse(accountTree)
-	return accountTree, nil
 }
