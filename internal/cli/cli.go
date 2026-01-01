@@ -1,14 +1,26 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"gt/models/gnucash"
 	"os"
 	"path"
 	"sync"
 
 	"github.com/spf13/cobra"
 	"github.com/volatiletech/sqlboiler/v4/boil"
+	"github.com/volatiletech/sqlboiler/v4/queries/qm"
+)
+
+var (
+	ErrTransactionMissing   = errors.New("transaction guid missing")
+	ErrAccountDoesNotExist  = errors.New("account does not exist")
+	ErrAccountMissingParent = errors.New("account missing parent")
+	ErrAccountMissing       = errors.New("account name or guid missing")
+	ErrAccountAlreadyExists = errors.New("account already exists")
 )
 
 type cli struct {
@@ -65,4 +77,31 @@ func (c *cli) initContext() error {
 	boil.SetDB(c.db)
 
 	return nil
+}
+
+// accountExists accepts an account and checks if it exists.
+func (c *cli) accountExists(ctx context.Context, account *gnucash.Account) (bool, error) {
+	p, err := gnucash.Accounts(qm.Where("guid=?", account.ParentGUID.String)).One(ctx, c.db)
+	if err != nil {
+		return false, err
+	}
+	return gnucash.Accounts(qm.Where("name=? AND parent_guid=?", account.Name, p.GUID)).Exists(ctx, c.db)
+}
+
+// getAccountFromGUIDOrAccountTree accepts a string which is an account GUID or
+// a case insensitive absolute account name in gnucash syntax and returns the
+// account.
+func (c *cli) getAccountFromGUIDOrAccountTree(ctx context.Context, s string) (*gnucash.Account, error) {
+	var account *gnucash.Account
+	var err error
+	account, err = gnucash.Accounts(qm.Where("guid=?", s)).One(ctx, c.db)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return getAccountFromAccountTreeString(ctx, c.db, s)
+		default:
+			return account, err
+		}
+	}
+	return account, nil
 }

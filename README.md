@@ -59,6 +59,11 @@ List transactions:
 $ gt transaction list
 ```
 
+List transactions and output in JSON:
+```shell
+$ gt transaction list --output json
+```
+
 List transactions for account `guid`:
 ```shell
 $ gt transaction list --account 9b1d2bc513da4076b236aee6114b21a7
@@ -69,10 +74,11 @@ List transactions for account tree:
 $ gt transaction list --account expenses:groceries
 ```
 
-List transactions starting from a date with a description that contains
+List transactions within a date range and with a description that contains
 _%Pizza_:
 ```shell
 $ gt transaction list --start-post-date 2024-01-01 \
+    --end-post-date 2024-12-31 \
     --description-like "%Pizza"
 ```
 
@@ -89,4 +95,12 @@ $ gt transaction bulk-update \
     --description-like "%Pizza" \
     --source-account expenses:pizza \
     --destination-account expenses:dining
+```
+
+Update an account:
+```shell
+$ gt account update "expenses:automotive registration" \
+    --name "registration" \
+    --description "auto registration" \
+    --parent-account "expenses:automotive"
 ```

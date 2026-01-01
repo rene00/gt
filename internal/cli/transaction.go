@@ -1,10 +1,14 @@
 package cli
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
 	"fmt"
-	"gt/internal/types"
+	"gt/internal/marshal"
+	"gt/internal/render"
+	"gt/internal/store"
 	"gt/models/gnucash"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -40,7 +44,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.SourceAccount)
+				sourceAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -48,7 +52,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.DestinationAccount)
+				destinationAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
@@ -65,24 +69,22 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			transactions := []types.Transaction{}
-			for _, gTransaction := range gTransactions {
-				splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), cli.db)
+			transactions := gnucash.TransactionSlice{}
+			splits := []*gnucash.Split{}
+			for _, transaction := range gTransactions {
+				gSplits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
 				if err != nil {
 					return err
 				}
-				for _, split := range splits {
+				for _, split := range gSplits {
 					if split.AccountGUID == sourceAccount.GUID {
 						split.AccountGUID = destinationAccount.GUID
 						_, err := split.Update(cmd.Context(), tx, boil.Infer())
 						if err != nil {
 							return err
 						}
-						transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
-						if err != nil {
-							return err
-						}
 						transactions = append(transactions, transaction)
+						splits = append(splits, split)
 					}
 				}
 			}
@@ -91,7 +93,7 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			resp, err := json.MarshalIndent(transactions, "", "    ")
+			resp, err := marshal.NewTransactionsMarshal(transactions).JSON()
 			if err != nil {
 				return err
 			}
@@ -126,7 +128,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			sourceAccount := &gnucash.Account{}
 			if flags.SourceAccount != "" {
-				sourceAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.SourceAccount)
+				sourceAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.SourceAccount)
 				if err != nil {
 					return err
 				}
@@ -134,18 +136,18 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 			destinationAccount := &gnucash.Account{}
 			if flags.DestinationAccount != "" {
-				destinationAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.DestinationAccount)
+				destinationAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.DestinationAccount)
 				if err != nil {
 					return err
 				}
 			}
 
-			gTransaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
+			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}
 
-			splits, err := gnucash.Splits(qm.Where("tx_guid=?", gTransaction.GUID)).All(cmd.Context(), cli.db)
+			splits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
 			if err != nil {
 				return err
 			}
@@ -164,12 +166,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
-			if err != nil {
-				return err
-			}
-
-			resp, err := json.MarshalIndent(transaction, "", "    ")
+			resp, err := marshal.NewTransactionMarshal(transaction, marshal.TransactionMarshalWithSplits(splits)).JSON()
 			if err != nil {
 				return err
 			}
@@ -184,105 +181,141 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 
 func listTransactionCmd(cli *cli) *cobra.Command {
 	var flags struct {
-		Account         string
-		Limit           int
-		StartPostDate   string
-		EndPostDate     string
-		DescriptionLike string
+		account         string
+		limit           int
+		startPostDate   string
+		endPostDate     string
+		descriptionLike string
+		output          string
+		orderByPostDate bool
+		orderDescending bool
 	}
 	var cmd = &cobra.Command{
 		Use: "list",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
-			unbounded := false
-			q := []qm.QueryMod{}
+			s := store.NewStore(cli.db)
+			transactionQuery := store.NewTransactionQuery()
 
-			gAccount := &gnucash.Account{}
-			if flags.Account != "" {
-				gAccount, err = getAccountFromGUIDOrAccountTree(cmd.Context(), cli.db, flags.Account)
+			var account *store.Account
+			if flags.account != "" {
+				account, err = s.Accounts.Get(cmd.Context(), flags.account)
 				if err != nil {
-					return err
+					if errors.Is(err, sql.ErrNoRows) {
+						account, err = s.Accounts.Get(cmd.Context(), flags.account, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return ErrAccountDoesNotExist
+						}
+					} else {
+						return ErrAccountDoesNotExist
+					}
 				}
-				unbounded = true
 			}
 
 			limit := 50
-			if flags.Limit != 0 {
-				limit = flags.Limit
-			}
-			if !unbounded {
-				q = append(q, qm.Limit(limit))
+			if flags.limit != 0 {
+				limit = flags.limit
 			}
 
-			if flags.StartPostDate != "" {
-				startPostDate, err := time.Parse("2006-01-02", flags.StartPostDate)
+			transactionQuery.Limit(limit)
+
+			if flags.orderByPostDate {
+				transactionQuery.OrderBy("post_date", flags.orderDescending)
+			}
+
+			if flags.startPostDate != "" {
+				startPostDate, err := time.Parse("2006-01-02", flags.startPostDate)
 				if err != nil {
 					return err
 				}
-				q = append(q, qm.Where("transactions.post_date>=?", startPostDate.Format("2006-01-02")))
+				transactionQuery.Where("transactions.post_date > ?", startPostDate.Format("2006-01-02"))
 			}
 
-			if flags.EndPostDate != "" {
-				endPostDate, err := time.Parse("2006-01-02", flags.EndPostDate)
+			if flags.endPostDate != "" {
+				endPostDate, err := time.Parse("2006-01-02", flags.endPostDate)
 				if err != nil {
 					return err
 				}
-				q = append(q, qm.Where("transactions.post_date<=?", endPostDate.Format("2006-01-02")))
+				transactionQuery.Where("transactions.post_date<=?", endPostDate.Format("2006-01-02"))
 			}
 
-			if flags.DescriptionLike != "" {
-				q = append(q, qm.Where("transactions.description LIKE ?", flags.DescriptionLike))
+			if flags.descriptionLike != "" {
+				transactionQuery.Where("transactions.description LIKE ?", flags.descriptionLike)
 			}
 
-			gTransactions := gnucash.TransactionSlice{}
-			if flags.Account != "" {
-				q = append(q, []qm.QueryMod{
-					qm.Where("splits.account_guid=?", gAccount.GUID),
-					qm.InnerJoin("transactions ON splits.tx_guid = transactions.guid"),
-					qm.OrderBy("transactions.post_date"),
-				}...)
-				splits, err := gnucash.Splits(q...).All(cmd.Context(), cli.db)
+			var transactions []*store.Transaction
+			if account != nil {
+				// NOTE(rene): If account is not nil, user is wanting to list
+				// transactions by account. To do this, we must find all splits with
+				// account_guid == account then return all transactions for found
+				// splits.
+				splits, err := s.Splits.All(cmd.Context(), store.NewSplitQuery().Where("account_guid=?", account.GUID))
+				if err != nil {
+					return err
+				}
+
+				txGUIDs := make([]string, 0, len(splits))
+				seenGUIDs := make(map[string]bool)
+				for _, split := range splits {
+					if !seenGUIDs[split.TXGUID] {
+						txGUIDs = append(txGUIDs, split.TXGUID)
+						seenGUIDs[split.TXGUID] = true
+					}
+				}
+
+				placeholders := make([]string, len(txGUIDs))
+				args := make([]any, len(txGUIDs))
+				for i, guid := range txGUIDs {
+					placeholders[i] = "?"
+					args[i] = guid
+				}
+
+				transactions, err = s.Transactions.All(cmd.Context(), transactionQuery.Copy().Where(fmt.Sprintf("guid IN (%s)", strings.Join(placeholders, ",")), args...))
+				if err != nil {
+					return err
+				}
+			} else {
+				transactions, err = s.Transactions.All(cmd.Context(), transactionQuery)
+				if err != nil {
+					return err
+				}
+			}
+
+			r, err := render.New(flags.output)
+			if err != nil {
+				return err
+			}
+
+			for _, transaction := range transactions {
+				splits, err := s.Splits.All(cmd.Context(), store.NewSplitQuery().Where("tx_guid = ?", transaction.GUID))
 				if err != nil {
 					return err
 				}
 				for _, split := range splits {
-					gTransaction, err := gnucash.Transactions(qm.Where("guid=?", split.TXGUID)).One(cmd.Context(), cli.db)
+					accounts, err := s.Accounts.All(cmd.Context(), store.NewAccountQuery().Where("guid = ?", split.AccountGUID))
 					if err != nil {
 						return err
 					}
-					if len(gTransactions) < limit {
-						gTransactions = append(gTransactions, gTransaction)
+					if len(accounts) != 1 {
+						return fmt.Errorf("expected 1 account, got %d", len(accounts))
 					}
+					split.Account = *accounts[0]
 				}
-			} else {
-				gTransactions, err = gnucash.Transactions(q...).All(cmd.Context(), cli.db)
-				if err != nil {
-					return err
-				}
+				transaction.Splits = splits
 			}
 
-			transactions := []types.Transaction{}
-			for _, gTransaction := range gTransactions {
-				transaction, err := types.NewTransaction(cmd.Context(), cli.db, *gTransaction)
-				if err != nil {
-					return err
-				}
-				transactions = append(transactions, transaction)
-			}
-
-			resp, err := json.MarshalIndent(transactions, "", "    ")
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(resp))
-			return nil
+			return r.Render(cmd.OutOrStdout(), transactions)
 		},
 	}
 
-	cmd.Flags().IntVar(&flags.Limit, "limit", 0, "Limit")
-	cmd.Flags().StringVar(&flags.Account, "account", "", "Account GUID")
-	cmd.Flags().StringVar(&flags.StartPostDate, "start-post-date", "", "Start Post Date")
-	cmd.Flags().StringVar(&flags.DescriptionLike, "description-like", "", "Description like")
+	cmd.Flags().IntVar(&flags.limit, "limit", 0, "Limit")
+	cmd.Flags().StringVar(&flags.account, "account", "", "Account GUID")
+	cmd.Flags().StringVar(&flags.startPostDate, "start-post-date", "", "Start Post Date")
+	cmd.Flags().StringVar(&flags.endPostDate, "end-post-date", "", "Start Post Date")
+	cmd.Flags().BoolVar(&flags.orderByPostDate, "order-by-post-date", false, "Order by Post Date")
+	cmd.Flags().BoolVar(&flags.orderDescending, "order-descending", false, "Order Descending")
+	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
+	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
 	return cmd
 }
 
@@ -299,7 +332,13 @@ func getTransactionCmd(cli *cli) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			resp, err := json.MarshalIndent(transaction, "", "    ")
+
+			splits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
+			if err != nil {
+				return err
+			}
+
+			resp, err := marshal.NewTransactionMarshal(transaction, marshal.TransactionMarshalWithSplits(splits)).JSON()
 			if err != nil {
 				return err
 			}

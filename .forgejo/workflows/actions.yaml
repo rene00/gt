@@ -1,0 +1,43 @@
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    tags:
+      - 'v*'
+jobs:
+  all:
+    runs-on: docker
+    steps:
+      - name: install go
+        run: |
+          wget https://golang.org/dl/go1.21.8.linux-amd64.tar.gz
+          tar -C /usr/local -xzf go1.21.8.linux-amd64.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+      - name: check
+        uses: https://code.forgejo.org/actions/checkout@v3
+      - name: test
+        run: |
+          go test ./...
+      - name: build
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p build
+          for os in linux; do
+            GOOS=$os GOARCH=amd64 go build -o gt-$os_amd64 ./cmd/gt
+          done
+      - name: create release
+        uses: "https://github.com/softprops/action-gh-release@v1"
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: v${{ github.ref_name }}
+          release_name: v${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: upload assets
+        uses: "https://github.com/softprops/action-gh-release@v1"
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            gt-linux_amd64
+          tag_name: v${{ github.ref_name }}
