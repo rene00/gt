@@ -164,7 +164,7 @@ type TransactionsStorer interface {
 }
 
 type TransactionsStore struct {
-	db *sql.DB
+	db DBTX
 }
 
 func (t TransactionsStore) Get(ctx context.Context, guid string) (*Transaction, error) {

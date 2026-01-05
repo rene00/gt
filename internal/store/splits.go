@@ -120,10 +120,11 @@ func (q *SplitQuery) Args() []any {
 
 type SplitsStorer interface {
 	All(ctx context.Context, q *SplitQuery) ([]*Split, error)
+	Update(ctx context.Context, split *Split) error
 }
 
 type SplitsStore struct {
-	db *sql.DB
+	db DBTX
 }
 
 func (s SplitsStore) All(ctx context.Context, q *SplitQuery) ([]*Split, error) {
@@ -184,4 +185,70 @@ func (s *SplitsStore) scanSplits(rows *sql.Rows) ([]*Split, error) {
 	}
 
 	return splits, rows.Err()
+}
+
+func (s SplitsStore) Update(ctx context.Context, split *Split) error {
+	query := `
+UPDATE splits
+SET
+	tx_guid = ?,
+	account_guid = ?,
+	memo = ?,
+	action = ?,
+	reconcile_state = ?,
+	reconcile_date = ?,
+	value_num = ?,
+	value_denom = ?,
+	quantity_num = ?,
+	quantity_denom = ?,
+	lot_guid = ?
+WHERE guid = ?
+`
+
+	var reconcileDate sql.NullString
+	if split.ReconcileDate != nil {
+		reconcileDate = sql.NullString{
+			String: split.ReconcileDate.Format("2006-01-02 15:04:05"),
+			Valid:  true,
+		}
+	}
+
+	var logGUID sql.NullString
+	if split.LogGUID != nil {
+		logGUID = sql.NullString{
+			String: *split.LogGUID,
+			Valid:  true,
+		}
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		query,
+		split.TXGUID,
+		split.AccountGUID,
+		split.Memo,
+		split.Action,
+		split.ReconcileState,
+		reconcileDate,
+		split.ValueNum,
+		split.ValueDenom,
+		split.QuantityNum,
+		split.QuantityDenom,
+		logGUID,
+		split.GUID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }

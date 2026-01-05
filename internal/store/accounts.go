@@ -120,7 +120,7 @@ type AccountsStorer interface {
 }
 
 type AccountsStore struct {
-	db   *sql.DB
+	db   DBTX
 	Opts AccountsOpts
 }
 
@@ -142,7 +142,7 @@ func WithAccountTree(b bool) AccountsOptFunc {
 	}
 }
 
-func getAccountFromAccountTree(ctx context.Context, db *sql.DB, s string) (*Account, error) {
+func getAccountFromAccountTree(ctx context.Context, db DBTX, s string) (*Account, error) {
 	q := NewAccountQuery().Where("account_type=? AND name=? AND parent_guid IS NULL", "ROOT", "Root Account")
 	row := db.QueryRowContext(ctx, q.Build(), q.Args()...)
 	rootAccount, err := scanAccount(row)
