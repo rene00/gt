@@ -286,24 +286,6 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			for _, transaction := range transactions {
-				splits, err := s.Splits.All(cmd.Context(), store.NewSplitQuery().Where("tx_guid = ?", transaction.GUID))
-				if err != nil {
-					return err
-				}
-				for _, split := range splits {
-					accounts, err := s.Accounts.All(cmd.Context(), store.NewAccountQuery().Where("guid = ?", split.AccountGUID))
-					if err != nil {
-						return err
-					}
-					if len(accounts) != 1 {
-						return fmt.Errorf("expected 1 account, got %d", len(accounts))
-					}
-					split.Account = *accounts[0]
-				}
-				transaction.Splits = splits
-			}
-
 			return r.Render(cmd.OutOrStdout(), transactions)
 		},
 	}
@@ -320,31 +302,25 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 }
 
 func getTransactionCmd(cli *cli) *cobra.Command {
+	var flags struct {
+		output string
+	}
 	var cmd = &cobra.Command{
 		Use: "get",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return fmt.Errorf("missing transaction guid")
 			}
-
 			guid := args[0]
-			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
+			s := store.NewStore(cli.db)
+			transaction, err := s.Transactions.Get(cmd.Context(), guid)
 			if err != nil {
 				return err
 			}
-
-			splits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
-			if err != nil {
-				return err
-			}
-
-			resp, err := marshal.NewTransactionMarshal(transaction, marshal.TransactionMarshalWithSplits(splits)).JSON()
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(resp))
+			fmt.Println(string(transaction.GUID))
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
 	return cmd
 }

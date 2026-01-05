@@ -12,8 +12,8 @@ type Account struct {
 	Name          string
 	AccountType   string
 	CommodityGUID *string
-	CommodityScu  int64
-	NonSTDScu     int64
+	CommoditySCU  int64
+	NonSTDSCU     int64
 	ParentGUID    *string
 	Code          *string
 	Description   *string
@@ -232,8 +232,8 @@ func scanAccount(scanner rowScanner) (*Account, error) {
 		&account.Name,
 		&account.AccountType,
 		&commodityGUID,
-		&account.CommodityScu,
-		&account.NonSTDScu,
+		&account.CommoditySCU,
+		&account.NonSTDSCU,
 		&parentGUID,
 		&code,
 		&description,

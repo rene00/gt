@@ -21,7 +21,7 @@ type Split struct {
 	QuantityNum    int64
 	QuantityDenom  int64
 	LogGUID        *string
-	Account        Account
+	Account        *Account
 }
 
 type SplitQuery struct {
