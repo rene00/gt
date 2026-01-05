@@ -44,8 +44,14 @@ type TableRenderer struct{}
 
 func (t *TableRenderer) Render(w io.Writer, data any) error {
 
-	transactions, ok := data.([]*store.Transaction)
-	if !ok {
+	var transactions []*store.Transaction
+
+	switch v := data.(type) {
+	case *store.Transaction:
+		transactions = []*store.Transaction{v}
+	case []*store.Transaction:
+		transactions = v
+	default:
 		return fmt.Errorf("unsupported model type: %T", data)
 	}
 

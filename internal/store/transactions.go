@@ -168,7 +168,7 @@ type TransactionsStore struct {
 }
 
 func (t TransactionsStore) Get(ctx context.Context, guid string) (*Transaction, error) {
-	q := NewTransactionQuery().Where("guid=?", guid)
+	q := NewTransactionQuery().Where("transactions.guid=?", guid)
 	rows, err := t.db.QueryContext(ctx, q.Build(), q.Args()...)
 	if err != nil {
 		return nil, err

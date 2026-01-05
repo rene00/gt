@@ -294,7 +294,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 	cmd.Flags().StringVar(&flags.account, "account", "", "Account GUID")
 	cmd.Flags().StringVar(&flags.startPostDate, "start-post-date", "", "Start Post Date")
 	cmd.Flags().StringVar(&flags.endPostDate, "end-post-date", "", "Start Post Date")
-	cmd.Flags().BoolVar(&flags.orderByPostDate, "order-by-post-date", false, "Order by Post Date")
+	cmd.Flags().BoolVar(&flags.orderByPostDate, "order-by-post-date", true, "Order by Post Date")
 	cmd.Flags().BoolVar(&flags.orderDescending, "order-descending", false, "Order Descending")
 	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
 	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
@@ -311,14 +311,20 @@ func getTransactionCmd(cli *cli) *cobra.Command {
 			if len(args) != 1 {
 				return fmt.Errorf("missing transaction guid")
 			}
+
 			guid := args[0]
 			s := store.NewStore(cli.db)
 			transaction, err := s.Transactions.Get(cmd.Context(), guid)
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(transaction.GUID))
-			return nil
+
+			r, err := render.New(flags.output)
+			if err != nil {
+				return err
+			}
+
+			return r.Render(cmd.OutOrStdout(), transaction)
 		},
 	}
 	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
