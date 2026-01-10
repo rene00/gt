@@ -25,8 +25,18 @@ var (
 )
 
 var (
-	FlagsUsageOutput = "Output format (json, table)"
+	FlagsUsageOutput        = "Output format (json, table)"
+	FlagsUsageIncludeTotals = "Include account totals when rendering table"
 )
+
+func accountError(err error) error {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrAccountDoesNotExist
+	default:
+		return err
+	}
+}
 
 type cli struct {
 	debug      bool

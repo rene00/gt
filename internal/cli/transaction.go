@@ -4,16 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"gt/internal/marshal"
 	"gt/internal/render"
 	"gt/internal/store"
-	"gt/models/gnucash"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/volatiletech/sqlboiler/v4/boil"
-	"github.com/volatiletech/sqlboiler/v4/queries/qm"
 )
 
 func transactionCmd(cli *cli) *cobra.Command {
@@ -29,9 +25,10 @@ func transactionCmd(cli *cli) *cobra.Command {
 
 func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 	var flags struct {
-		DescriptionLike    string
-		SourceAccount      string
-		DestinationAccount string
+		descriptionLike    string
+		sourceAccount      string
+		destinationAccount string
+		output             string
 	}
 	var cmd = &cobra.Command{
 		Use: "bulk-update",
@@ -42,49 +39,58 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 			}
 			defer tx.Rollback()
 
-			sourceAccount := &gnucash.Account{}
-			if flags.SourceAccount != "" {
-				sourceAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.SourceAccount)
+			s := store.NewStore(cli.db)
+			txStore := s.WithTx(tx)
+
+			sourceAccount := &store.Account{}
+			if flags.sourceAccount != "" {
+				sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount)
 				if err != nil {
-					return err
+					if errors.Is(err, sql.ErrNoRows) {
+						sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return accountError(err)
+						}
+					} else {
+						return accountError(err)
+					}
 				}
 			}
 
-			destinationAccount := &gnucash.Account{}
-			if flags.DestinationAccount != "" {
-				destinationAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.DestinationAccount)
+			destinationAccount := &store.Account{}
+			if flags.destinationAccount != "" {
+				destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount)
 				if err != nil {
-					return err
+					if errors.Is(err, sql.ErrNoRows) {
+						destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return accountError(err)
+						}
+					} else {
+						return accountError(err)
+					}
 				}
 			}
 
-			var q []qm.QueryMod
-
-			if flags.DescriptionLike != "" {
-				q = append(q, qm.Where("transactions.description LIKE ?", flags.DescriptionLike))
+			q := store.NewTransactionQuery()
+			if flags.descriptionLike != "" {
+				q.Where("transactions.description LIKE ?", flags.descriptionLike)
 			}
 
-			gTransactions, err := gnucash.Transactions(q...).All(cmd.Context(), cli.db)
+			transactions, err := txStore.Transactions.All(cmd.Context(), q)
 			if err != nil {
 				return err
 			}
 
-			transactions := gnucash.TransactionSlice{}
-			splits := []*gnucash.Split{}
-			for _, transaction := range gTransactions {
-				gSplits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
-				if err != nil {
-					return err
-				}
-				for _, split := range gSplits {
-					if split.AccountGUID == sourceAccount.GUID {
+			for _, transaction := range transactions {
+				for _, split := range transaction.Splits {
+					if split.AccountGUID == sourceAccount.GUID && destinationAccount.GUID != "" {
 						split.AccountGUID = destinationAccount.GUID
-						_, err := split.Update(cmd.Context(), tx, boil.Infer())
-						if err != nil {
+						split.Account = destinationAccount
+
+						if err := txStore.Splits.Update(cmd.Context(), split); err != nil {
 							return err
 						}
-						transactions = append(transactions, transaction)
-						splits = append(splits, split)
 					}
 				}
 			}
@@ -93,17 +99,18 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			resp, err := marshal.NewTransactionsMarshal(transactions).JSON()
+			r, err := render.New(flags.output)
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(resp))
-			return nil
+
+			return r.Render(cmd.OutOrStderr(), transactions)
 		},
 	}
-	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
-	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
-	cmd.Flags().StringVar(&flags.DescriptionLike, "description-like", "", "Description like")
+	cmd.Flags().StringVar(&flags.sourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.destinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
+	cmd.Flags().StringVar(&flags.output, "output", "table", FlagsUsageOutput)
 	return cmd
 }
 
@@ -169,7 +176,7 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 			}
 
 			for _, split := range transaction.Splits {
-				if split.AccountGUID == sourceAccount.GUID {
+				if split.AccountGUID == sourceAccount.GUID && destinationAccount.GUID != "" {
 					split.AccountGUID = destinationAccount.GUID
 					split.Account = destinationAccount
 					if err := txStore.Splits.Update(cmd.Context(), split); err != nil {
@@ -206,6 +213,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 		output          string
 		orderByPostDate bool
 		orderDescending bool
+		includeTotals   bool
 	}
 	var cmd = &cobra.Command{
 		Use: "list",
@@ -303,7 +311,8 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			return r.Render(cmd.OutOrStdout(), transactions)
+			renderOpts := []render.RendererOptsFunc{render.WithIncludeTotals(flags.includeTotals)}
+			return r.Render(cmd.OutOrStdout(), transactions, renderOpts...)
 		},
 	}
 
@@ -315,6 +324,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.orderDescending, "order-descending", false, "Order Descending")
 	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
 	cmd.Flags().StringVar(&flags.output, "output", "table", FlagsUsageOutput)
+	cmd.Flags().BoolVar(&flags.includeTotals, "include-totals", true, FlagsUsageIncludeTotals)
 	return cmd
 }
 

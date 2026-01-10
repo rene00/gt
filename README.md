@@ -74,6 +74,11 @@ List transactions for account tree:
 $ gt transaction list --account expenses:groceries
 ```
 
+List transactions for account tree and exclude totals:
+```shell
+$ gt transaction list --account expenses:petrol --include-totals=false
+```
+
 List transactions within a date range and with a description that contains
 _%Pizza_:
 ```shell
