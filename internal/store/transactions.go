@@ -46,7 +46,9 @@ func (q *TransactionQuery) OrderBy(field string, descending bool) *TransactionQu
 }
 
 func (q *TransactionQuery) Limit(limit int) *TransactionQuery {
-	q.limit = &limit
+	if limit != 0 {
+		q.limit = &limit
+	}
 	return q
 }
 
