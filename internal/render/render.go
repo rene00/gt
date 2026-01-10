@@ -11,7 +11,7 @@ import (
 )
 
 type Renderer interface {
-	Render(w io.Writer, data any) error
+	Render(w io.Writer, data any, opts ...RendererOptsFunc) error
 }
 
 type Format string
@@ -21,7 +21,7 @@ const (
 	FormatTable Format = "table"
 )
 
-func New(format string) (Renderer, error) {
+func New(format string, opts ...RendererOptsFunc) (Renderer, error) {
 	switch Format(format) {
 	case FormatJSON:
 		return &JSONRenderer{}, nil
@@ -32,9 +32,11 @@ func New(format string) (Renderer, error) {
 	}
 }
 
-type JSONRenderer struct{}
+type JSONRenderer struct {
+	opts *RendererOpts
+}
 
-func (j *JSONRenderer) Render(w io.Writer, data any) error {
+func (j *JSONRenderer) Render(w io.Writer, data any, _ ...RendererOptsFunc) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "    ")
 	return encoder.Encode(data)
@@ -42,10 +44,39 @@ func (j *JSONRenderer) Render(w io.Writer, data any) error {
 
 type TableRenderer struct{}
 
-func (t *TableRenderer) Render(w io.Writer, data any) error {
+type RendererOpts struct {
+	includeTotals bool
+}
 
-	transactions, ok := data.([]*store.Transaction)
-	if !ok {
+func defaultRendererOpts() *RendererOpts {
+	return &RendererOpts{
+		includeTotals: false,
+	}
+}
+
+type RendererOptsFunc func(*RendererOpts)
+
+func WithIncludeTotals(b bool) RendererOptsFunc {
+	return func(o *RendererOpts) {
+		o.includeTotals = b
+	}
+}
+
+func (t *TableRenderer) Render(w io.Writer, data any, opts ...RendererOptsFunc) error {
+
+	o := defaultRendererOpts()
+	for _, fn := range opts {
+		fn(o)
+	}
+
+	var transactions []*store.Transaction
+
+	switch v := data.(type) {
+	case *store.Transaction:
+		transactions = []*store.Transaction{v}
+	case []*store.Transaction:
+		transactions = v
+	default:
 		return fmt.Errorf("unsupported model type: %T", data)
 	}
 
@@ -64,6 +95,13 @@ func (t *TableRenderer) Render(w io.Writer, data any) error {
 
 	table := tablewriter.NewTable(w, tablewriter.WithConfig(cfg))
 	table.Header([]string{"Date", "Description", "Account", "Debit", "Credit"})
+
+	type AccountTotal struct {
+		Name       string
+		TotalNum   int64
+		TotalDenom int64
+	}
+	accountTotals := make(map[string]*AccountTotal)
 
 	for _, transaction := range transactions {
 		if len(transaction.Splits) == 0 {
@@ -88,13 +126,56 @@ func (t *TableRenderer) Render(w io.Writer, data any) error {
 			table.Append([]string{
 				"",
 				"",
-				"  " + split.Account.Name,
+				split.Account.Name,
+				debit,
+				credit,
+			})
+
+			accountGUID := split.AccountGUID
+			if _, exists := accountTotals[accountGUID]; !exists {
+				accountTotals[accountGUID] = &AccountTotal{
+					Name:       split.Account.Name,
+					TotalNum:   0,
+					TotalDenom: split.ValueDenom,
+				}
+			}
+			accountTotals[accountGUID].TotalNum += split.ValueNum
+		}
+
+		table.Append([]string{"", "", "", "", ""})
+	}
+
+	if len(accountTotals) > 0 && o.includeTotals {
+		table.Append([]string{"", "TOTALS", "", ""})
+
+		type sortableTotal struct {
+			name  string
+			total *AccountTotal
+		}
+
+		sortedAccounts := make([]sortableTotal, 0, len(accountTotals))
+		for _, total := range accountTotals {
+			sortedAccounts = append(sortedAccounts, sortableTotal{name: total.Name, total: total})
+		}
+
+		for i := 0; i < len(sortedAccounts); i++ {
+			for j := i + 1; j < len(sortedAccounts); j++ {
+				if sortedAccounts[i].name > sortedAccounts[j].name {
+					sortedAccounts[i], sortedAccounts[j] = sortedAccounts[j], sortedAccounts[i]
+				}
+			}
+		}
+
+		for _, sortedAccount := range sortedAccounts {
+			debit, credit := formatAmount(sortedAccount.total.TotalNum, sortedAccount.total.TotalDenom)
+			table.Append([]string{
+				"",
+				"",
+				sortedAccount.name,
 				debit,
 				credit,
 			})
 		}
-
-		table.Append([]string{"", "", "", "", ""})
 	}
 
 	return table.Render()

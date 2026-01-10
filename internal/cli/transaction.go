@@ -4,16 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"gt/internal/marshal"
 	"gt/internal/render"
 	"gt/internal/store"
-	"gt/models/gnucash"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/volatiletech/sqlboiler/v4/boil"
-	"github.com/volatiletech/sqlboiler/v4/queries/qm"
 )
 
 func transactionCmd(cli *cli) *cobra.Command {
@@ -29,9 +25,10 @@ func transactionCmd(cli *cli) *cobra.Command {
 
 func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 	var flags struct {
-		DescriptionLike    string
-		SourceAccount      string
-		DestinationAccount string
+		descriptionLike    string
+		sourceAccount      string
+		destinationAccount string
+		output             string
 	}
 	var cmd = &cobra.Command{
 		Use: "bulk-update",
@@ -42,49 +39,58 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 			}
 			defer tx.Rollback()
 
-			sourceAccount := &gnucash.Account{}
-			if flags.SourceAccount != "" {
-				sourceAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.SourceAccount)
+			s := store.NewStore(cli.db)
+			txStore := s.WithTx(tx)
+
+			sourceAccount := &store.Account{}
+			if flags.sourceAccount != "" {
+				sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount)
 				if err != nil {
-					return err
+					if errors.Is(err, sql.ErrNoRows) {
+						sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return accountError(err)
+						}
+					} else {
+						return accountError(err)
+					}
 				}
 			}
 
-			destinationAccount := &gnucash.Account{}
-			if flags.DestinationAccount != "" {
-				destinationAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.DestinationAccount)
+			destinationAccount := &store.Account{}
+			if flags.destinationAccount != "" {
+				destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount)
 				if err != nil {
-					return err
+					if errors.Is(err, sql.ErrNoRows) {
+						destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return accountError(err)
+						}
+					} else {
+						return accountError(err)
+					}
 				}
 			}
 
-			var q []qm.QueryMod
-
-			if flags.DescriptionLike != "" {
-				q = append(q, qm.Where("transactions.description LIKE ?", flags.DescriptionLike))
+			q := store.NewTransactionQuery()
+			if flags.descriptionLike != "" {
+				q.Where("transactions.description LIKE ?", flags.descriptionLike)
 			}
 
-			gTransactions, err := gnucash.Transactions(q...).All(cmd.Context(), cli.db)
+			transactions, err := txStore.Transactions.All(cmd.Context(), q)
 			if err != nil {
 				return err
 			}
 
-			transactions := gnucash.TransactionSlice{}
-			splits := []*gnucash.Split{}
-			for _, transaction := range gTransactions {
-				gSplits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
-				if err != nil {
-					return err
-				}
-				for _, split := range gSplits {
-					if split.AccountGUID == sourceAccount.GUID {
+			for _, transaction := range transactions {
+				for _, split := range transaction.Splits {
+					if split.AccountGUID == sourceAccount.GUID && destinationAccount.GUID != "" {
 						split.AccountGUID = destinationAccount.GUID
-						_, err := split.Update(cmd.Context(), tx, boil.Infer())
-						if err != nil {
+						split.Account = destinationAccount
+
+						if err := txStore.Splits.Update(cmd.Context(), split); err != nil {
 							return err
 						}
-						transactions = append(transactions, transaction)
-						splits = append(splits, split)
 					}
 				}
 			}
@@ -93,30 +99,32 @@ func bulkUpdateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			resp, err := marshal.NewTransactionsMarshal(transactions).JSON()
+			r, err := render.New(flags.output)
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(resp))
-			return nil
+
+			return r.Render(cmd.OutOrStderr(), transactions)
 		},
 	}
-	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
-	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
-	cmd.Flags().StringVar(&flags.DescriptionLike, "description-like", "", "Description like")
+	cmd.Flags().StringVar(&flags.sourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.destinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
+	cmd.Flags().StringVar(&flags.output, "output", "table", FlagsUsageOutput)
 	return cmd
 }
 
 func updateTransactionCmd(cli *cli) *cobra.Command {
 	var flags struct {
-		SourceAccount      string
-		DestinationAccount string
+		sourceAccount      string
+		destinationAccount string
+		output             string
 	}
 	var cmd = &cobra.Command{
 		Use: "update",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
-				return fmt.Errorf("missing transaction guid")
+				return ErrTransactionMissing
 			}
 			guid := args[0]
 
@@ -126,37 +134,52 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 			}
 			defer tx.Rollback()
 
-			sourceAccount := &gnucash.Account{}
-			if flags.SourceAccount != "" {
-				sourceAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.SourceAccount)
-				if err != nil {
-					return err
-				}
-			}
+			s := store.NewStore(cli.db)
+			txStore := s.WithTx(tx)
 
-			destinationAccount := &gnucash.Account{}
-			if flags.DestinationAccount != "" {
-				destinationAccount, err = cli.getAccountFromGUIDOrAccountTree(cmd.Context(), flags.DestinationAccount)
-				if err != nil {
-					return err
-				}
-			}
-
-			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
+			transaction, err := txStore.Transactions.Get(cmd.Context(), guid)
 			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrTransactionNotFound
+				}
 				return err
 			}
 
-			splits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
-			if err != nil {
-				return err
+			sourceAccount := &store.Account{}
+			if flags.sourceAccount != "" {
+				sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						sourceAccount, err = txStore.Accounts.Get(cmd.Context(), flags.sourceAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return ErrAccountDoesNotExist
+						}
+					} else {
+						return ErrAccountDoesNotExist
+					}
+				}
 			}
 
-			for _, split := range splits {
-				if split.AccountGUID == sourceAccount.GUID {
+			destinationAccount := &store.Account{}
+			if flags.destinationAccount != "" {
+				destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						destinationAccount, err = txStore.Accounts.Get(cmd.Context(), flags.destinationAccount, []store.AccountsOptFunc{store.WithAccountTree(true)}...)
+						if err != nil {
+							return ErrAccountDoesNotExist
+						}
+					} else {
+						return ErrAccountDoesNotExist
+					}
+				}
+			}
+
+			for _, split := range transaction.Splits {
+				if split.AccountGUID == sourceAccount.GUID && destinationAccount.GUID != "" {
 					split.AccountGUID = destinationAccount.GUID
-					_, err := split.Update(cmd.Context(), tx, boil.Infer())
-					if err != nil {
+					split.Account = destinationAccount
+					if err := txStore.Splits.Update(cmd.Context(), split); err != nil {
 						return err
 					}
 				}
@@ -166,16 +189,17 @@ func updateTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			resp, err := marshal.NewTransactionMarshal(transaction, marshal.TransactionMarshalWithSplits(splits)).JSON()
+			r, err := render.New(flags.output)
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(resp))
-			return nil
+
+			return r.Render(cmd.OutOrStdout(), transaction)
 		},
 	}
-	cmd.Flags().StringVar(&flags.SourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
-	cmd.Flags().StringVar(&flags.DestinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.sourceAccount, "source-account", "", "Source Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.destinationAccount, "destination-account", "", "Destination Account GUID or Full Account Name")
+	cmd.Flags().StringVar(&flags.output, "output", "table", FlagsUsageOutput)
 	return cmd
 }
 
@@ -189,6 +213,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 		output          string
 		orderByPostDate bool
 		orderDescending bool
+		includeTotals   bool
 	}
 	var cmd = &cobra.Command{
 		Use: "list",
@@ -286,25 +311,8 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 				return err
 			}
 
-			for _, transaction := range transactions {
-				splits, err := s.Splits.All(cmd.Context(), store.NewSplitQuery().Where("tx_guid = ?", transaction.GUID))
-				if err != nil {
-					return err
-				}
-				for _, split := range splits {
-					accounts, err := s.Accounts.All(cmd.Context(), store.NewAccountQuery().Where("guid = ?", split.AccountGUID))
-					if err != nil {
-						return err
-					}
-					if len(accounts) != 1 {
-						return fmt.Errorf("expected 1 account, got %d", len(accounts))
-					}
-					split.Account = *accounts[0]
-				}
-				transaction.Splits = splits
-			}
-
-			return r.Render(cmd.OutOrStdout(), transactions)
+			renderOpts := []render.RendererOptsFunc{render.WithIncludeTotals(flags.includeTotals)}
+			return r.Render(cmd.OutOrStdout(), transactions, renderOpts...)
 		},
 	}
 
@@ -312,14 +320,18 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 	cmd.Flags().StringVar(&flags.account, "account", "", "Account GUID")
 	cmd.Flags().StringVar(&flags.startPostDate, "start-post-date", "", "Start Post Date")
 	cmd.Flags().StringVar(&flags.endPostDate, "end-post-date", "", "Start Post Date")
-	cmd.Flags().BoolVar(&flags.orderByPostDate, "order-by-post-date", false, "Order by Post Date")
+	cmd.Flags().BoolVar(&flags.orderByPostDate, "order-by-post-date", true, "Order by Post Date")
 	cmd.Flags().BoolVar(&flags.orderDescending, "order-descending", false, "Order Descending")
 	cmd.Flags().StringVar(&flags.descriptionLike, "description-like", "", "Description like")
-	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
+	cmd.Flags().StringVar(&flags.output, "output", "table", FlagsUsageOutput)
+	cmd.Flags().BoolVar(&flags.includeTotals, "include-totals", true, FlagsUsageIncludeTotals)
 	return cmd
 }
 
 func getTransactionCmd(cli *cli) *cobra.Command {
+	var flags struct {
+		output string
+	}
 	var cmd = &cobra.Command{
 		Use: "get",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -328,23 +340,20 @@ func getTransactionCmd(cli *cli) *cobra.Command {
 			}
 
 			guid := args[0]
-			transaction, err := gnucash.Transactions(qm.Where("guid=?", guid)).One(cmd.Context(), cli.db)
+			s := store.NewStore(cli.db)
+			transaction, err := s.Transactions.Get(cmd.Context(), guid)
 			if err != nil {
 				return err
 			}
 
-			splits, err := gnucash.Splits(qm.Where("tx_guid=?", transaction.GUID)).All(cmd.Context(), cli.db)
+			r, err := render.New(flags.output)
 			if err != nil {
 				return err
 			}
 
-			resp, err := marshal.NewTransactionMarshal(transaction, marshal.TransactionMarshalWithSplits(splits)).JSON()
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(resp))
-			return nil
+			return r.Render(cmd.OutOrStdout(), transaction)
 		},
 	}
+	cmd.Flags().StringVar(&flags.output, "output", "table", "Output format")
 	return cmd
 }

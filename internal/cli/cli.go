@@ -17,11 +17,26 @@ import (
 
 var (
 	ErrTransactionMissing   = errors.New("transaction guid missing")
+	ErrTransactionNotFound  = errors.New("transaction not found")
 	ErrAccountDoesNotExist  = errors.New("account does not exist")
 	ErrAccountMissingParent = errors.New("account missing parent")
 	ErrAccountMissing       = errors.New("account name or guid missing")
 	ErrAccountAlreadyExists = errors.New("account already exists")
 )
+
+var (
+	FlagsUsageOutput        = "Output format (json, table)"
+	FlagsUsageIncludeTotals = "Include account totals when rendering table"
+)
+
+func accountError(err error) error {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrAccountDoesNotExist
+	default:
+		return err
+	}
+}
 
 type cli struct {
 	debug      bool
