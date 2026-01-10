@@ -237,12 +237,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 				}
 			}
 
-			limit := 50
-			if flags.limit != 0 {
-				limit = flags.limit
-			}
-
-			transactionQuery.Limit(limit)
+			transactionQuery.Limit(flags.limit)
 
 			if flags.orderByPostDate {
 				transactionQuery.OrderBy("post_date", flags.orderDescending)
@@ -316,7 +311,7 @@ func listTransactionCmd(cli *cli) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVar(&flags.limit, "limit", 0, "Limit")
+	cmd.Flags().IntVar(&flags.limit, "limit", 50, "Limit")
 	cmd.Flags().StringVar(&flags.account, "account", "", "Account GUID")
 	cmd.Flags().StringVar(&flags.startPostDate, "start-post-date", "", "Start Post Date")
 	cmd.Flags().StringVar(&flags.endPostDate, "end-post-date", "", "Start Post Date")

@@ -69,10 +69,16 @@ List transactions for account `guid`:
 $ gt transaction list --account 9b1d2bc513da4076b236aee6114b21a7
 ```
 
-List transactions for account tree:
+List up to 50 (`limit` defaults to `50`) transactions for account tree:
 ```shell
 $ gt transaction list --account expenses:groceries
 ```
+
+List all transactions for account tree by setting `limit` to `0`:
+```shell
+$ gt transaction list --account expenses:groceries --limit=0
+```
+
 
 List transactions for account tree and exclude totals:
 ```shell
