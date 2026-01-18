@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 )
 
 type Account struct {
 	GUID          string
 	Name          string
+	FullName      string
 	AccountType   string
 	CommodityGUID *string
 	CommoditySCU  int64
@@ -117,6 +119,7 @@ func (q *AccountQuery) Args() []any {
 type AccountsStorer interface {
 	All(ctx context.Context, q *AccountQuery) ([]*Account, error)
 	Get(ctx context.Context, s string, opts ...AccountsOptFunc) (*Account, error)
+	Update(ctx context.Context, account *Account) error
 }
 
 type AccountsStore struct {
@@ -140,6 +143,26 @@ func WithAccountTree(b bool) AccountsOptFunc {
 	return func(o *AccountsOpts) {
 		o.withAccountTree = b
 	}
+}
+
+// getFullAccountName takes a store.Account and attempts to return its full account name (e.g. expenses:dining:pizza)
+func getFullAccountName(ctx context.Context, db DBTX, account *Account) (string, error) {
+	s := []string{account.Name}
+	for account.ParentGUID != nil {
+		var err error
+		q := NewAccountQuery().Where("guid=?", account.ParentGUID)
+		row := db.QueryRowContext(ctx, q.Build(), q.Args()...)
+		account, err = scanAccount(row)
+		if err != nil {
+			return "", err
+		}
+		if strings.ToLower(account.AccountType) == "root" {
+			break
+		}
+		s = append(s, account.Name)
+	}
+	slices.Reverse(s)
+	return strings.Join(s, ":"), nil
 }
 
 func getAccountFromAccountTree(ctx context.Context, db DBTX, s string) (*Account, error) {
@@ -182,6 +205,11 @@ func (s AccountsStore) Get(ctx context.Context, guidOrName string, opts ...Accou
 		if err != nil {
 			return nil, err
 		}
+		fullName, err := getFullAccountName(ctx, s.db, account)
+		if err != nil {
+			return nil, err
+		}
+		account.FullName = fullName
 		return account, nil
 	}
 
@@ -196,6 +224,12 @@ func (s AccountsStore) Get(ctx context.Context, guidOrName string, opts ...Accou
 	if err != nil {
 		return nil, err
 	}
+
+	fullName, err := getFullAccountName(ctx, s.db, account)
+	if err != nil {
+		return nil, err
+	}
+	account.FullName = fullName
 
 	return account, nil
 }
@@ -216,6 +250,11 @@ func (s AccountsStore) All(ctx context.Context, q *AccountQuery) ([]*Account, er
 		if err != nil {
 			return nil, err
 		}
+		fullName, err := getFullAccountName(ctx, s.db, account)
+		if err != nil {
+			return nil, err
+		}
+		account.FullName = fullName
 		accounts = append(accounts, account)
 	}
 
@@ -269,4 +308,104 @@ func scanAccount(scanner rowScanner) (*Account, error) {
 	}
 
 	return &account, nil
+}
+
+func (a AccountsStore) Update(ctx context.Context, account *Account) error {
+	query := `
+UPDATE accounts
+SET
+	name = ?,
+	account_type = ?,
+	commodity_guid = ?,
+	commodity_scu = ?,
+	non_std_scu = ?,
+	parent_guid = ?,
+	code = ?,
+	description = ?,
+	hidden = ?,
+	placeholder = ?
+WHERE guid = ? AND rowid IN (
+    SELECT rowid FROM accounts WHERE guid = ? LIMIT 1
+)
+`
+
+	var commodityGUID sql.NullString
+	if account.CommodityGUID != nil {
+		commodityGUID = sql.NullString{
+			String: *account.CommodityGUID,
+			Valid:  true,
+		}
+	}
+
+	var parentGUID sql.NullString
+	if account.ParentGUID != nil {
+		parentGUID = sql.NullString{
+			String: *account.ParentGUID,
+			Valid:  true,
+		}
+	}
+
+	var code sql.NullString
+	if account.Code != nil {
+		code = sql.NullString{
+			String: *account.Code,
+			Valid:  true,
+		}
+	}
+
+	var description sql.NullString
+	if account.Description != nil {
+		description = sql.NullString{
+			String: *account.Description,
+			Valid:  true,
+		}
+	}
+
+	var hidden sql.NullInt64
+	if account.Hidden != nil {
+		hidden = sql.NullInt64{
+			Int64: *account.Hidden,
+			Valid: true,
+		}
+	}
+
+	var placeholder sql.NullInt64
+	if account.Placeholder != nil {
+		placeholder = sql.NullInt64{
+			Int64: *account.Placeholder,
+			Valid: true,
+		}
+	}
+
+	result, err := a.db.ExecContext(
+		ctx,
+		query,
+		account.Name,
+		account.AccountType,
+		commodityGUID,
+		account.CommoditySCU,
+		account.NonSTDSCU,
+		parentGUID,
+		code,
+		description,
+		hidden,
+		placeholder,
+		account.GUID,
+		account.GUID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }

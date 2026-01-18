@@ -4,11 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"gt/models/gnucash"
+	"gt/internal/store"
+	"os"
 	"testing"
-
-	"github.com/volatiletech/null/v8"
-	"github.com/volatiletech/sqlboiler/v4/boil"
 )
 
 func TestAccountCmd(t *testing.T) {
@@ -23,31 +21,39 @@ func TestGetAccountCmd(t *testing.T) {
 	var err error
 	ctx := context.Background()
 
-	c := &cli{}
-	c.db, err = sql.Open("sqlite3", ":memory:")
+	f, _ := os.CreateTemp("", "testdb-*.sqlite")
+	dsn := f.Name()
+	f.Close()
+	defer os.Remove(dsn)
+
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	boil.SetDB(c.db)
+	defer db.Close()
 
-	if err = createTestingTables(ctx, c.db, t); err != nil {
+	if err = createTestingTables(ctx, db, t); err != nil {
 		t.Fatal(err)
 	}
 
-	account := gnucash.Account{
-		Name: "test1", GUID: "2", ParentGUID: null.StringFrom("EXPENSESGUID"),
-	}
-
-	if err := account.Insert(ctx, c.db, boil.Infer()); err != nil {
+	if _, err = db.ExecContext(ctx,
+		"INSERT INTO accounts (guid, name, account_type, parent_guid, commodity_scu, non_std_scu) VALUES (?, ?, ?, ?, ?, ?)",
+		"2",
+		"test1",
+		"EXPENSE",
+		"EXPENSESGUID",
+		100,
+		100); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := executeCommand(getAccountCmd(c), "2")
+	c := &cli{db: db}
+	out, err := executeCommand(getAccountCmd(c), "2", "--output", "json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var resp gnucash.Account
+	var resp store.Account
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +62,7 @@ func TestGetAccountCmd(t *testing.T) {
 		t.Fatalf("expected test1 but got %s", resp.Name)
 	}
 
-	out, err = executeCommand(getAccountCmd(c), "expenses:test1")
+	out, err = executeCommand(getAccountCmd(c), "expenses:test1", "--output", "json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,36 +77,54 @@ func TestGetAccountCmd(t *testing.T) {
 }
 
 func TestListAccountCmd(t *testing.T) {
-	var err error
 	ctx := context.Background()
 
-	c := &cli{}
-	c.db, err = sql.Open("sqlite3", ":memory:")
+	f, _ := os.CreateTemp("", "testdb-*.sqlite")
+	dsn := f.Name()
+	f.Close()
+	defer os.Remove(dsn)
+
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	boil.SetDB(c.db)
+	defer db.Close()
 
-	if err = createTestingTables(ctx, c.db, t); err != nil {
+	if err = createTestingTables(ctx, db, t); err != nil {
 		t.Fatal(err)
 	}
 
-	accounts := []*gnucash.Account{
-		{Name: "test1", GUID: "1"}, {Name: "test2", GUID: "2"},
+	accounts := []struct {
+		GUID        string
+		Name        string
+		AccountType string
+	}{
+		{GUID: "1", Name: "test1", AccountType: "EXPENSE"},
+		{GUID: "2", Name: "test2", AccountType: "EXPENSE"},
 	}
 
 	for _, account := range accounts {
-		if err := account.Insert(ctx, c.db, boil.Infer()); err != nil {
+		_, err := db.ExecContext(ctx,
+			"INSERT INTO accounts (guid, name, account_type, commodity_scu, non_std_scu) VALUES (?, ?, ?, ?, ?)",
+			account.GUID,
+			account.Name,
+			account.AccountType,
+			100,
+			100,
+		)
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	out, err := executeCommand(listAccountCmd(c), "")
+	c := &cli{db: db}
+
+	out, err := executeCommand(listAccountCmd(c), "--output", "json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var resp []gnucash.Account
+	var resp []store.Account
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -125,52 +149,74 @@ func TestListAccountCmd(t *testing.T) {
 
 func TestUpdateAccountCmd(t *testing.T) {
 	t.Run("no args", func(t *testing.T) {
-		var err error
 		ctx := context.Background()
 
-		c := &cli{}
-		c.db, err = sql.Open("sqlite3", ":memory:")
+		f, _ := os.CreateTemp("", "testdb-*.sqlite")
+		dsn := f.Name()
+		f.Close()
+		defer os.Remove(dsn)
+
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
-		boil.SetDB(c.db)
 
-		if err = createTestingTables(ctx, c.db, t); err != nil {
+		if err = createTestingTables(ctx, db, t); err != nil {
 			t.Fatal(err)
 		}
 
-		_, err = executeCommand(updateAccountCmd(c), "does-not-exist")
+		c := &cli{db: db}
+
+		_, err = executeCommand(updateAccountCmd(c), "does-not-exist", "--output", "json")
 		if err != ErrAccountDoesNotExist {
 			t.Fatalf("expected ErrAccountMissing error but received %v", err)
 		}
 	})
 
 	t.Run("account already exists", func(t *testing.T) {
-		var err error
 		ctx := context.Background()
 
-		c := &cli{}
-		c.db, err = sql.Open("sqlite3", ":memory:")
+		f, _ := os.CreateTemp("", "testdb-*.sqlite")
+		dsn := f.Name()
+		f.Close()
+		defer os.Remove(dsn)
+
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
-		boil.SetDB(c.db)
 
-		if err = createTestingTables(ctx, c.db, t); err != nil {
+		if err = createTestingTables(ctx, db, t); err != nil {
 			t.Fatal(err)
 		}
 
-		accounts := []*gnucash.Account{
-			{Name: "test1", GUID: "2", ParentGUID: null.StringFrom("EXPENSESGUID")}, {Name: "test2", GUID: "3", ParentGUID: null.StringFrom("EXPENSESGUID")},
+		accounts := []struct {
+			GUID        string
+			Name        string
+			AccountType string
+			ParentGUID  string
+		}{
+			{GUID: "1", Name: "test1", AccountType: "EXPENSE", ParentGUID: "EXPENSESGUID"},
+			{GUID: "2", Name: "test2", AccountType: "EXPENSE", ParentGUID: "EXPENSESGUID"},
 		}
 
 		for _, account := range accounts {
-			if err := account.Insert(ctx, c.db, boil.Infer()); err != nil {
+			_, err := db.ExecContext(ctx,
+				"INSERT INTO accounts (guid, name, account_type, commodity_scu, non_std_scu, parent_guid) VALUES (?, ?, ?, ?, ?, ?)",
+				account.GUID,
+				account.Name,
+				account.AccountType,
+				100,
+				100,
+				account.ParentGUID,
+			)
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
 
-		_, err = executeCommand(updateAccountCmd(c), "expenses:test1", "--name=test2")
+		c := &cli{db: db}
+		_, err = executeCommand(updateAccountCmd(c), "expenses:test1", "--name", "test2")
 		if err != ErrAccountAlreadyExists {
 			t.Fatalf("expecting ErrAccountAlreadyExists err but received %v", err)
 		}
@@ -180,28 +226,39 @@ func TestUpdateAccountCmd(t *testing.T) {
 		var err error
 		ctx := context.Background()
 
-		c := &cli{}
-		c.db, err = sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			t.Fatal(err)
-		}
-		boil.SetDB(c.db)
+		f, _ := os.CreateTemp("", "testdb-*.sqlite")
+		dsn := f.Name()
+		f.Close()
+		defer os.Remove(dsn)
 
-		if err = createTestingTables(ctx, c.db, t); err != nil {
-			t.Fatal(err)
-		}
-
-		account := gnucash.Account{Name: "test1", GUID: "2", Description: null.StringFrom("test-1"), ParentGUID: null.StringFrom("EXPENSESGUID")}
-		if err := account.Insert(ctx, c.db, boil.Infer()); err != nil {
-			t.Fatal(err)
-		}
-
-		out, err := executeCommand(updateAccountCmd(c), "expenses:test1", "--name=test2", "--description=test-2")
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		var resp gnucash.Account
+		if err = createTestingTables(ctx, db, t); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err = db.ExecContext(ctx,
+			"INSERT INTO accounts (guid, name, account_type, parent_guid, commodity_scu, non_std_scu) VALUES (?, ?, ?, ?, ?, ?)",
+			"2",
+			"test1",
+			"EXPENSE",
+			"EXPENSESGUID",
+			100,
+			100); err != nil {
+			t.Fatal(err)
+		}
+
+		c := &cli{db: db}
+
+		out, err := executeCommand(updateAccountCmd(c), "expenses:test1", "--name=test2", "--description=test-2", "--output=json")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var resp store.Account
 		if err := json.Unmarshal([]byte(out), &resp); err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +267,7 @@ func TestUpdateAccountCmd(t *testing.T) {
 			t.Fatalf("expected name test2 but got %s", resp.Name)
 		}
 
-		if resp.Description.String != "test-2" {
+		if *resp.Description != "test-2" {
 			t.Fatalf("expected description test-2 but got %s", resp.Name)
 		}
 	})
