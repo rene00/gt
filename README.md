@@ -39,9 +39,15 @@ List accounts:
 $ gt account list
 ```
 
-List accounts that have _Groceries_ in their name:
+List accounts and output in JSON:
 ```shell
-$ gt account list --name-like "Groceries"
+$ gt account list --output json
+```
+
+List accounts that have _Groceries_ in their name and output their
+short name (i.e "Groceries" instead of "Expenses:Groceries"):
+```shell
+$ gt account list --name-like "Groceries" --short-name
 ```
 
 Get an account by `guid`:

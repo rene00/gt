@@ -46,15 +46,26 @@ type TableRenderer struct{}
 
 type RendererOpts struct {
 	includeTotals bool
+
+	// use accounts short name (i.e. pizza) when rendering instead of full name
+	// (i.e expenses:dining:pizza)
+	accountShortName bool
 }
 
 func defaultRendererOpts() *RendererOpts {
 	return &RendererOpts{
-		includeTotals: false,
+		includeTotals:    false,
+		accountShortName: false,
 	}
 }
 
 type RendererOptsFunc func(*RendererOpts)
+
+func WithAccountShortName(b bool) RendererOptsFunc {
+	return func(o *RendererOpts) {
+		o.accountShortName = b
+	}
+}
 
 func WithIncludeTotals(b bool) RendererOptsFunc {
 	return func(o *RendererOpts) {
@@ -62,38 +73,28 @@ func WithIncludeTotals(b bool) RendererOptsFunc {
 	}
 }
 
-func (t *TableRenderer) Render(w io.Writer, data any, opts ...RendererOptsFunc) error {
+func renderAccounts(table *tablewriter.Table, opts RendererOpts, accounts []*store.Account) {
+	table.Header([]string{"Name", "Account Type", "Description"})
+	for _, account := range accounts {
+		name := account.FullName
+		if opts.accountShortName {
+			name = account.Name
+		}
 
-	o := defaultRendererOpts()
-	for _, fn := range opts {
-		fn(o)
+		description := ""
+		if account.Description != nil {
+			description = *account.Description
+		}
+
+		table.Append([]string{
+			name,
+			account.AccountType,
+			description,
+		})
 	}
+}
 
-	var transactions []*store.Transaction
-
-	switch v := data.(type) {
-	case *store.Transaction:
-		transactions = []*store.Transaction{v}
-	case []*store.Transaction:
-		transactions = v
-	default:
-		return fmt.Errorf("unsupported model type: %T", data)
-	}
-
-	cfg := tablewriter.Config{
-		Header: tw.CellConfig{
-			Alignment: tw.CellAlignment{
-				Global: tw.AlignLeft,
-			},
-		},
-		Row: tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: int(tw.Off),
-			},
-		},
-	}
-
-	table := tablewriter.NewTable(w, tablewriter.WithConfig(cfg))
+func renderTransactions(table *tablewriter.Table, opts RendererOpts, transactions []*store.Transaction) {
 	table.Header([]string{"Date", "Description", "Account", "Debit", "Credit"})
 
 	type AccountTotal struct {
@@ -145,7 +146,7 @@ func (t *TableRenderer) Render(w io.Writer, data any, opts ...RendererOptsFunc) 
 		table.Append([]string{"", "", "", "", ""})
 	}
 
-	if len(accountTotals) > 0 && o.includeTotals {
+	if len(accountTotals) > 0 && opts.includeTotals {
 		table.Append([]string{"", "TOTALS", "", ""})
 
 		type sortableTotal struct {
@@ -176,6 +177,41 @@ func (t *TableRenderer) Render(w io.Writer, data any, opts ...RendererOptsFunc) 
 				credit,
 			})
 		}
+	}
+}
+
+func (t *TableRenderer) Render(w io.Writer, data any, opts ...RendererOptsFunc) error {
+
+	o := defaultRendererOpts()
+	for _, fn := range opts {
+		fn(o)
+	}
+
+	cfg := tablewriter.Config{
+		Header: tw.CellConfig{
+			Alignment: tw.CellAlignment{
+				Global: tw.AlignLeft,
+			},
+		},
+		Row: tw.CellConfig{
+			Formatting: tw.CellFormatting{
+				AutoWrap: int(tw.Off),
+			},
+		},
+	}
+
+	table := tablewriter.NewTable(w, tablewriter.WithConfig(cfg))
+	switch v := data.(type) {
+	case []*store.Account:
+		renderAccounts(table, *o, v)
+	case *store.Account:
+		renderAccounts(table, *o, []*store.Account{v})
+	case *store.Transaction:
+		renderTransactions(table, *o, []*store.Transaction{v})
+	case []*store.Transaction:
+		renderTransactions(table, *o, v)
+	default:
+		return fmt.Errorf("unsupported model type: %T", data)
 	}
 
 	return table.Render()
